@@ -217,11 +217,13 @@ function recursive(func) {
 /**
  * the lifesaver combinator. expression parsing.
  * @example
- * let expr = recursive({
- *   binopgen: (lhs, op, rhs) => op == '+' ? lhs + rhs : lhs - rhs,
- *   preopgen: (op, term) => -term,
- * }, expr =>
- *   operators(any(
+ * let {any, chain, just, match, operators, recursive} = require('@otesunki/numb');
+ * 
+ * let expr = recursive(expr =>
+ *   operators({
+ *     binopgen: (lhs, op, rhs) => op == '+' ? lhs + rhs : lhs - rhs,
+ *     preopgen: (op, term) => -term,
+ *   }, any(
  *     match(/-?\d+/).process(Number),
  *     chain(just('('), expr, just(')')),
  *   ),
@@ -230,7 +232,7 @@ function recursive(func) {
  *   )
  * );
  * @arg {Object} gens - an object containing functions to generate the AST output
- * @arg {operators_binopgen} gens.binop - infix (binary) operator AST generator
+ * @arg {operators_infopgen} gens.infop - infix (binary) operator AST generator
  * @arg {operators_preopgen} gens.preop - prefix operator AST generator
  * @arg {operators_postopgen} gens.postop - postfix operator AST generator
  * @arg {Parser} term - parser for a single term in an expression
@@ -240,7 +242,7 @@ function recursive(func) {
  * @return {Parser} res - expression parser
  */
 function operators(gens, term, ...operators) {
-    let binopgen = gens.binop ?? ((lhs, op, rhs) => ({type: 'binop', op, lhs, rhs}));
+    let infopgen = gens.infop ?? ((lhs, op, rhs) => ({type: 'binop', op, lhs, rhs}));
     let preopgen = gens.preop ?? ((op, term) => ({type: 'unop', fix: 'pre', op, term}));
     let postopgen = gens.preop ?? ((op, term) => ({type: 'unop', fix: 'post', op, term}));
     function get_type(operator) {
@@ -278,7 +280,7 @@ function operators(gens, term, ...operators) {
                     [term, ...rest] = [term, ...rest].reverse()
                 let pairs = rest.flatMap((_, i, a) => i % 2 ? [] : [a.slice(i++, ++i)]);
                 return pairs.reduce(
-                    (a, [op, b]) => binop(assc === 'ltr' ? a : b, op, assc === 'ltr' ? b : a)
+                    (a, [op, b]) => infopgen(assc === 'ltr' ? a : b, op, assc === 'ltr' ? b : a)
                 , term);
             });
         }
@@ -286,8 +288,8 @@ function operators(gens, term, ...operators) {
 }
 
 /**
- * callback for `operators` (`gens.binop`)
- * @callback operators_binopgen
+ * callback for `operators` (`gens.infop`)
+ * @callback operators_infopgen
  * @arg {*} lhs - left hand side
  * @arg {String} op - operator
  * @arg {*} rhs - right hand
