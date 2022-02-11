@@ -19,7 +19,7 @@ class Parser {
    */
   parse(string) {
     let out = this.parse_raw(string);
-    return out?.res ?? null;
+    return out?.got ?? null;
   }
   /**
    * parse without post-processing
