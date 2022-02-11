@@ -1,5 +1,5 @@
 {
-  "name": "numb",
+  "name": "@otesunki/numb",
   "version": "1.0.0",
   "description": "a PEG combinatorial parser",
   "main": "main.js",
