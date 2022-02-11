@@ -18,7 +18,7 @@ class Parser {
    * @return {!String} res - parsing result
    */
   parse(string) {
-    let res = this.parse_raw(string);
+    let out = this.parse_raw(string);
     return out?.res ?? null;
   }
   /**
