@@ -240,9 +240,9 @@ function recursive(func) {
  * @return {Parser} res - expression parser
  */
 function operators(gens, term, ...operators) {
-    let binopgen = gens.binop ?? (lhs, op, rhs) => ({type: 'binop', op, lhs, rhs});
-    let preopgen = gens.preop ?? (op, term) => ({type: 'unop', fix: 'pre', op, term});
-    let postopgen = gens.preop ?? (op, term) => ({type: 'unop', fix: 'post', op, term});
+    let binopgen = gens.binop ?? ((lhs, op, rhs) => ({type: 'binop', op, lhs, rhs}));
+    let preopgen = gens.preop ?? ((op, term) => ({type: 'unop', fix: 'pre', op, term}));
+    let postopgen = gens.preop ?? ((op, term) => ({type: 'unop', fix: 'post', op, term}));
     function get_type(operator) {
         return operator.prefix ? 'prefix' :
                operator.postfix ? 'postfix' :
