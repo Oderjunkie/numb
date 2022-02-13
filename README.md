@@ -21,5 +21,5 @@ let expr = recursive(expr =>
   )
 );
 
-console.log(expr.parse_raw('(1 + 2) * -3'));
+console.log(expr.parse_raw('(1 + 2) - (-3)'));
 ```
