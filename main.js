@@ -243,8 +243,8 @@ function recursive(func) {
  */
 function operators(gens, term, ...operators) {
     let infopgen = gens.infop ?? ((lhs, op, rhs) => ({type: 'binop', op, lhs, rhs}));
-    let preopgen = gens.preop ?? ((op, term) => ({type: 'unop', fix: 'pre', op, term}));
-    let postopgen = gens.preop ?? ((op, term) => ({type: 'unop', fix: 'post', op, term}));
+    let preopgen = gens.preop ?? ((term, op) => ({type: 'unop', fix: 'pre', op, term}));
+    let postopgen = gens.postop ?? ((term, op) => ({type: 'unop', fix: 'post', op, term}));
     function get_type(operator) {
         return operator.prefix ? 'prefix' :
                operator.postfix ? 'postfix' :
@@ -299,16 +299,16 @@ function operators(gens, term, ...operators) {
 /**
  * callback for `operators` (`gens.preop`)
  * @callback operators_preopgen
- * @arg {String} op - operator
  * @arg {*} term - term
+ * @arg {String} op - operator
  * @return {*} res - output
  */
 
 /**
  * callback for `operators` (`gens.postop`)
  * @callback operators_postopgen
- * @arg {String} op - operator
  * @arg {*} term - term
+ * @arg {String} op - operator
  * @return {*} res - output
  */
 

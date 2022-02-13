@@ -1,6 +1,6 @@
 {
   "name": "@otesunki/numb",
-  "version": "2.0.2",
+  "version": "3.0.0",
   "description": "a PEG combinatorial parser",
   "main": "main.js",
   "scripts": {
