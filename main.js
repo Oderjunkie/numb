@@ -9,8 +9,9 @@ class Parser {
    * console.assert(out.length === 1);
    * console.assert(out[0] === 'accept-all');
    */
-  constructor(handler) {
+  constructor(handler, ...args) {
     this.handler = handler;
+    this.args = args;
   }
   /**
    * parse
@@ -29,7 +30,7 @@ class Parser {
    * @return {*[]} res.got - parsing result
    */
   parse_raw(string) {
-    return this.handler(string);
+    return this.handler(...this.args, string);
   }
   /**
    * parse this, otherwise parse something else
@@ -37,11 +38,11 @@ class Parser {
    * @return {Parser} res - new parser
    */
   or(other) {
-    return new Parser(string => {
-      let mine = this.parse_raw(string);
+    return new Parser((that, other, string) => {
+      let mine = that.parse_raw(string);
       if (mine) return mine;
       return other.parse_raw(string);
-    });
+    }, this, other);
   }
   /**
    * parse this, then parse something else
@@ -49,8 +50,8 @@ class Parser {
    * @return {Parser} res - new parser
    */
   then(other) {
-    return new Parser(string => {
-      let mine = this.parse_raw(string);
+    return new Parser((that, other, string) => {
+      let mine = that.parse_raw(string);
       if (mine) {
         let theirs = other.parse_raw(mine.left);
         if (theirs) {
@@ -58,40 +59,40 @@ class Parser {
         }
       }
       return null;
-    })
+    }, this, other)
   }
   /**
    * parse this, otherwise parse nothing
    * @return {Parser} res - new parser
    */
   maybe() {
-    return new Parser(string => {
-      let mine = this.parse_raw(string);
+    return new Parser((that, string) => {
+      let mine = that.parse_raw(string);
       if (mine) return mine;
       return {got: [null], left: string};
-    });
+    }, this);
   }
   /**
    * parse, then ignore the result
    * @return {Parser} res - new parser
    */
   ignore() {
-    return new Parser(string => {
-      let mine = this.parse_raw(string);
+    return new Parser((that, string) => {
+      let mine = that.parse_raw(string);
       if (mine)
         return {got: [], left: mine.left};
       return null;
-    });
+    }, this);
   }
   /**
    * repeatedly parse until no longer parsing successfully
    * @return {Parser} res - new parser
    */
   repeat() {
-    return new Parser(string => {
+    return new Parser((that, string) => {
       let result = {got: [], left: string};
       while (true) {
-        let mine = this.parse_raw(result.left);
+        let mine = that.parse_raw(result.left);
         if (mine) {
           result.left = mine.left;
           result.got = result.got.concat(mine.got);
@@ -99,20 +100,20 @@ class Parser {
           return {got: [result.got], left: result.left};
         }
       }
-    });
+    }, this);
   }
   /**
    * process result of parser
    * @arg {Parser~processor} fn - processor
    * @return {Parser} res - new parser
    */
-  process(fn) {
-    return new Parser(string => {
-      let mine = this.parse_raw(string);
+  process(fn, ...extra_args) {
+    return new Parser((that, fn, extra_args, string) => {
+      let mine = that.parse_raw(string);
       if (mine)
-        return {got: [fn(...mine.got)], left: mine.left};
+        return {got: [fn(...extra_args, ...mine.got)], left: mine.left};
       return null;
-    });
+    }, this, fn, extra_args);
   }
   /**
    * parse, ignore the result, and use a different one
@@ -172,11 +173,11 @@ function seperate(parser, delim) {
  * @return {Parser} parser - new parser, with the result of `token`
  */
 function just(token) {
-  return new Parser(string => {
+  return new Parser((token, string) => {
     if (string.startsWith(token))
       return {got: [token], left: string.slice(token.length)};
     return null;
-  });
+  }, token);
 }
 
 /**
@@ -189,12 +190,12 @@ function match(regex) {
   let flags = regex.flags.replace('g', '')
                          .replace('m', '');
   let new_regex = new RegExp(source, flags);
-  return new Parser(string=>{
-    let possible_match = string.match(new_regex);
+  return new Parser((regex, string) => {
+    let possible_match = string.match(regex);
     if (possible_match)
       return {got: possible_match, left: string.slice(possible_match[0].length)};
     return null;
-  });
+  }, new_regex);
 }
 
 /**
@@ -203,7 +204,9 @@ function match(regex) {
  * @return {Parser} res - new (recursive) parser
  */
 function recursive(func) {
-  let lazy_parser = new Parser(input => recursive(func).parse_raw(input));
+  let lazy_parser = new Parser(
+    input => recursive(func).parse_raw(input)
+  );
   return func(lazy_parser);
 }
 
@@ -270,19 +273,21 @@ function operators(gens, term, ...operators) {
         let opparse = chain(match(/\s*/).ignore(), any(...ops.map(just)), match(/\s*/).ignore());
         switch (type) {
             case  'prefix': return opparse.repeat().then(term).process(
-                (ops, term) => ops.reduceRight(preopgen, term)
+                (preopgen, ops, term) => ops.reduceRight(preopgen, term),
+                preopgen
             );
             case 'postfix': return term.then(opparse.repeat()).process(
-                (term, ops) => ops.reduce(postopgen, term)
+                (postopgen, term, ops) => ops.reduce(postopgen, term),
+                postopgen,
             );
-            case  'infix':  return seperate(term, opparse).process(([term, ...rest]) => {
+            case  'infix':  return seperate(term, opparse).process((infopgen, [term, ...rest]) => {
                 if (assc === 'rtl')
                     [term, ...rest] = [term, ...rest].reverse()
                 let pairs = rest.flatMap((_, i, a) => i % 2 ? [] : [a.slice(i++, ++i)]);
                 return pairs.reduce(
                     (a, [op, b]) => infopgen(assc === 'ltr' ? a : b, op, assc === 'ltr' ? b : a)
                 , term);
-            });
+            }, infopgen);
         }
     }, term);
 }
@@ -312,4 +317,48 @@ function operators(gens, term, ...operators) {
  * @return {*} res - output
  */
 
-module.exports = {Parser, chain, any, seperate, just, match, recursive, operators};
+/**
+ * optimizes a parser, `eval` warning
+ * only works if all closure variables are explicitly passed to `Parser`.
+ * @arg {Parser} parser - the parser to optimize
+ * @return {Parser} res - optimized parser
+ */
+function optimize(parser) {
+    if (!(parser instanceof Parser)) return parser;
+    let {handler, args} = parser;
+    if (typeof handler !== 'function') return parser;
+    let lambda = !handler.toString().startsWith('function');
+    let arg_names, rest;
+    if (lambda) {
+        [arg_names, ...rest] = handler.toString().split('=>');
+        rest = rest.join('=>');
+        if (arg_names[0] === '(')
+            arg_names = arg_names.slice(1, -2);
+        arg_names = arg_names.split(', ');
+    } else {
+        [arg_names, ...rest] = handler.toString().split('{');
+        rest = rest.join('{');
+        arg_names = arg_names.slice(10, -2);
+        arg_names = arg_names.split(', ');
+    }
+    for (let i in args) {
+        let arg = args[i];
+        if (arg instanceof Parser) {
+            arg = optimize(arg);
+            if (typeof arg.handler !== 'function') throw new Error();
+            if (arg.args.length > 0) throw new Error();
+            rest = rest.replaceAll(`${arg_names[i]}.parse_raw(`, `(${arg.handler})(`);
+        } else if (typeof arg == 'function') {
+            rest = rest.replaceAll(`${arg_names[i]}`, `(${arg.toString()})`);
+        } else {
+            rest = rest.replaceAll(`${arg_names[i]}`, `(${JSON.stringify(arg)})`);
+        }
+    }
+    let other_args = arg_names.slice(args.length);
+    let code =
+        lambda?
+        `(${other_args.join(', ')}) => ${rest}`:
+        `(function(${other_args.join(', ')}){${rest})`;
+    let inlined = eval(code);
+    return new Parser(inlined);
+}
