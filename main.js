@@ -137,6 +137,26 @@ class Parser {
    * @arg {...*} orig - original result
    * @return {*} res - result
    */
+  /**
+   * seperate a parser with a delimiter
+   * @arg {Parser} delim - the aformentioned delimiter, result is included in the final parser's result
+   * @return {Parser} parser - new parser
+   */
+  seperate(delim) {
+    return this.then(delim.then(this).repeat()).process((first, ...rest) => [first].concat(rest[0]));
+  }
+  /**
+   * parse, but don't eat any characters if parsing successfully
+   * @return {Parser} res - new parser
+   */
+  lookahead() {
+    return new Parser((that, string) => {
+      let mine = that.parse_raw(string);
+      if (mine)
+        return {got: mine.got, left: string};
+      return null;
+    }, this);
+  }
 }
 
 /**
@@ -158,18 +178,8 @@ function chain(...parsers) {
 }
 
 /**
- * seperate a parser with a delimiter
- * @arg {Parser} parser - the aformentioned parser
- * @arg {Parser} delim - the aformentioned delimiter, result is included in the final parser's result
- * @return {Parser} parser - new parser
- */
-function seperate(parser, delim) {
-  return parser.then(delim.then(parser).repeat()).process((first, ...rest) => [first].concat(rest[0]));
-}
-
-/**
  * parse a set string
- * @arg {strings} token - the aformentioned set string
+ * @arg {String} token - the aformentioned set string
  * @return {Parser} parser - new parser, with the result of `token`
  */
 function just(token) {
@@ -218,17 +228,40 @@ function recursive(func) {
  */
 
 /**
+ * more efficient way of writing `any(just(), just(), ...)`
+ * @arg {...String} possibilities - the strings
+ * @return {Parser} parser - new parser
+ */
+function narrow_down(...ps) {
+  return new Parser((ps, string) => {
+     let i;
+     let chars = string.length;
+     for (i = 0; i < chars; i++) {
+      let new_ps = ps.filter(p => p[i] == string[i]);
+      if (new_ps.length == 1)
+        ps = new_ps;
+      if (new_ps.length <= 1)
+        break;
+    }
+    if (ps.length > 1)
+      ps = ps.filter(p => p.length == i);
+    if (ps.length == 0) return null;
+    return {got: ps, left: string.slice(ps[0].length)};
+  }, ps);
+}
+
+/**
  * the lifesaver combinator. expression parsing.
  * @example
- * let {any, chain, just, match, operators, recursive} = require('@otesunki/numb');
+ * let {any, operators, recursive, common: {int, parenthesized}} = require('@otesunki/numb');
  * 
  * let expr = recursive(expr =>
  *   operators({
- *     binopgen: (lhs, op, rhs) => op == '+' ? lhs + rhs : lhs - rhs,
+ *     infopgen: (lhs, op, rhs) => op == '+' ? lhs + rhs : lhs - rhs,
  *     preopgen: (op, term) => -term,
  *   }, any(
- *     match(/-?\d+/).process(Number),
- *     chain(just('('), expr, just(')')),
+ *     int,
+ *     parenthesized(expr),
  *   ),
  *     [{prefix: '-'}],
  *     [{infix: '+', assc: 'ltr'}, {infix: '-', assc: 'ltr'}]
@@ -254,42 +287,95 @@ function operators(gens, term, ...operators) {
                operator.infix ? 'infix' :
                undefined;
     }
-    return operators.reduce((term, ops) => {
-        let types = new Set(ops.map(get_type));
+    operators.reverse();
+    let binding_powers = operators.flatMap((prec, i) => {
+        let types = new Set(prec.map(get_type));
         if (types.size !== 1)
             throw new Error('Multiple operators with the same precedence can\'t be of different types.');
-        let type = get_type(ops[0]);
+        let type = get_type(prec[0]);
         if (!type)
-            throw new Error(`Unknown operator type in: ${JSON.stringify(ops)}.`);
-        let asscs = new Set(ops.map(e=>e.assc));
+            throw new Error(`Unknown operator type in: ${JSON.stringify(ops)}.`)
+        let asscs = new Set(prec.map(e=>e.assc));
         if (asscs.size !== 1)
             throw new Error('Multiple operators with the same precedence can\'t be of different associativities.');
-        let assc = ops[0].assc;
+        let assc = prec[0].assc;
         if (assc !== 'ltr' && assc !== 'rtl')
             if (type === 'infix')
-                throw new Error(`Unknown associativity: ${assc}.`);
-        ops = ops.map(e=>e[type]);
-        ops.sort((x, y) => y.length - x.length);
-        let opparse = chain(match(/\s*/).ignore(), any(...ops.map(just)), match(/\s*/).ignore());
-        switch (type) {
-            case  'prefix': return opparse.repeat().then(term).process(
-                (preopgen, ops, term) => ops.reduceRight(preopgen, term),
-                preopgen
-            );
-            case 'postfix': return term.then(opparse.repeat()).process(
-                (postopgen, term, ops) => ops.reduce(postopgen, term),
-                postopgen,
-            );
-            case  'infix':  return seperate(term, opparse).process((infopgen, [term, ...rest]) => {
-                if (assc === 'rtl')
-                    [term, ...rest] = [term, ...rest].reverse()
-                let pairs = rest.flatMap((_, i, a) => i % 2 ? [] : [a.slice(i++, ++i)]);
-                return pairs.reduce(
-                    (a, [op, b]) => infopgen(assc === 'ltr' ? a : b, op, assc === 'ltr' ? b : a)
-                , term);
-            }, infopgen);
+                throw new Error(`Unknown associativity: ${assc}.`)
+        let left = -1;
+        let rght = -1;
+        if (type == 'infix') {
+            left = assc == 'rtl' ? i*2 : i*2+1;
+            rght = assc == 'ltr' ? i*2 : i*2+1;
+        } else if (type == 'prefix') {
+            rght = i*2;
+        } else if (type == 'postfix') {
+            left = i*2;
         }
-    }, term);
+        return prec.map(e=>({[e[type]]: [left, rght]}));
+    });
+    let infix_binding = binding_powers.filter(obj => {
+        let [left, rght] = Object.values(obj)[0];
+        return left !== -1 && rght !== -1;
+    }).reduce((x, y) => Object.assign(x, y), {});
+    let prefix_binding = binding_powers.filter(obj => {
+        let [left, rght] = Object.values(obj)[0];
+        return left === -1;
+    }).reduce((x, y) => Object.assign(x, y), {});
+    let postfix_binding = binding_powers.filter(obj => {
+        let [left, rght] = Object.values(obj)[0];
+        return rght === -1;
+    }).reduce((x, y) => Object.assign(x, y), {});
+    return new Parser((infopgen, preopgen, postopgen, term, infix_binding, prefix_binding, postfix_binding, string) => {
+        let prefixes = Object.keys(prefix_binding);
+        let infixes = Object.keys(infix_binding);
+        let postfixes = Object.keys(postfix_binding);
+        function expr(string, min_bp) {
+            let preop = narrow_down(...prefixes).parse_raw(string);
+            if (preop !== null)
+                string = preop.left;
+            let lhs = term.parse_raw(string);
+            if (lhs === null) return null;
+            string = lhs.left;
+            lhs = lhs.got[0];
+            if (preop !== null)
+                lhs = preopgen(lhs, preop.got[0])
+            outer: for (;;) {
+                let parsed = chain(
+                  match(/\s*/).ignore(),
+                  narrow_down(...postfixes),
+                  match(/\s*/).ignore(),
+                ).parse_raw(string);
+                if (parsed !== null) {
+                    let new_str = parsed.left;
+                    let [op] = parsed.got;
+                    let [l_bp, r_bp] = postfix_binding[op];
+                    if (l_bp < min_bp) break;
+                    string = new_str;
+                    lhs = postopgen(lhs, op);
+                }
+                parsed = chain(
+                  match(/\s*/).ignore(),
+                  narrow_down(...infixes),
+                  match(/\s*/).ignore(),
+                ).parse_raw(string);
+                if (parsed !== null) {
+                    let new_str = parsed.left;
+                    let [op] = parsed.got;
+                    let [l_bp, r_bp] = infix_binding[op];
+                    if (l_bp < min_bp) break;
+                    let rhs = expr(new_str, r_bp);
+                    if (rhs === null) break outer;
+                    string = rhs.left;
+                    rhs = rhs.got[0];
+                    lhs = infopgen(lhs, op, rhs);
+                }
+                break;
+            }
+            return {got: [lhs], left: string};
+        }
+        return expr(string, 0);
+    }, infopgen, preopgen, postopgen, term, infix_binding, prefix_binding, postfix_binding);
 }
 
 /**
@@ -317,48 +403,30 @@ function operators(gens, term, ...operators) {
  * @return {*} res - output
  */
 
-/**
- * optimizes a parser, `eval` warning
- * only works if all closure variables are explicitly passed to `Parser`.
- * @arg {Parser} parser - the parser to optimize
- * @return {Parser} res - optimized parser
- */
-function optimize(parser) {
-    if (!(parser instanceof Parser)) return parser;
-    let {handler, args} = parser;
-    if (typeof handler !== 'function') return parser;
-    let lambda = !handler.toString().startsWith('function');
-    let arg_names, rest;
-    if (lambda) {
-        [arg_names, ...rest] = handler.toString().split('=>');
-        rest = rest.join('=>');
-        if (arg_names[0] === '(')
-            arg_names = arg_names.slice(1, -2);
-        arg_names = arg_names.split(', ');
-    } else {
-        [arg_names, ...rest] = handler.toString().split('{');
-        rest = rest.join('{');
-        arg_names = arg_names.slice(10, -2);
-        arg_names = arg_names.split(', ');
-    }
-    for (let i in args) {
-        let arg = args[i];
-        if (arg instanceof Parser) {
-            arg = optimize(arg);
-            if (typeof arg.handler !== 'function') throw new Error();
-            if (arg.args.length > 0) throw new Error();
-            rest = rest.replaceAll(`${arg_names[i]}.parse_raw(`, `(${arg.handler})(`);
-        } else if (typeof arg == 'function') {
-            rest = rest.replaceAll(`${arg_names[i]}`, `(${arg.toString()})`);
-        } else {
-            rest = rest.replaceAll(`${arg_names[i]}`, `(${JSON.stringify(arg)})`);
-        }
-    }
-    let other_args = arg_names.slice(args.length);
-    let code =
-        lambda?
-        `(${other_args.join(', ')}) => ${rest}`:
-        `(function(${other_args.join(', ')}){${rest})`;
-    let inlined = eval(code);
-    return new Parser(inlined);
-}
+let eof = new Parser(string => {
+  if (string.length == 0)
+    return {got: [], left: string};
+  return null;
+});
+
+let nat = match(/\d+/).process(parseInt);
+let int = match(/-?\d+/).process(parseInt);
+let float = match(/-?(\d(\.\d*)|\.\d+|Infinity)|NaN/).process(parseFloat);
+let parenthesized = parser => chain(just('(').ignore(), parser, just(')').ignore());
+
+module.exports = {
+  Parser,
+  chain,
+  any,
+  just,
+  match,
+  recursive,
+  operators,
+  eof,
+  common: {
+    nat,
+    int,
+    float,
+    parenthesized,
+  }
+};
